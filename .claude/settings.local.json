@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell($pid = \\(Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue\\).OwningProcess | Select-Object -First 1; if \\($pid\\) { Stop-Process -Id $pid -Force; \"Killed PID $pid on port 3000\" } else { \"Nothing on port 3000\" })",
+      "PowerShell($proc = \\(Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue\\).OwningProcess | Select-Object -First 1; if \\($proc\\) { Stop-Process -Id $proc -Force; \"Killed PID $proc on port 3000\" } else { \"Nothing on port 3000\" })"
+    ]
+  }
+}
