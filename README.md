@@ -103,11 +103,11 @@ npm run dev
 
 ## 👥 Team
 
-| Role | Responsibility |
-|---|---|
-| Person A (Backend) | API, Database, Integration |
-| Person B (Agent) | AI Scoring, Gemini, Pattern Detection |
-| Person C (Frontend) | Dashboard, UI, User Experience |
+| Role | Name | Contact |
+|---|---|---|
+| Backend | Hamza Mohamed | [LinkedIn](https://www.linkedin.com/in/hamza-mohamed-93b110405/) |
+| Agent | Benjamin Kaggwa | [LinkedIn](https://www.linkedin.com/in/benjamin-kaggwa-a902b4283/) |
+| Frontend | Finlay Shayo | [LinkedIn](https://www.linkedin.com/in/finlay-shayo-76171a366/) |
 
 ---
 
