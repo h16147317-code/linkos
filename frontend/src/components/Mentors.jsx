@@ -1,4 +1,12 @@
-import { mockMentors } from '../mockData';
+import { useState, useEffect } from 'react';
+
+const API = 'http://localhost:3000';
+
+function availString(mentor) {
+  if (!mentor.availability) return 'full';
+  if (mentor.utilisation_pct >= 75) return 'limited';
+  return 'available';
+}
 
 function barColor(pct) {
   if (pct >= 90) return '#EF4444';
@@ -6,21 +14,50 @@ function barColor(pct) {
   return '#10B981';
 }
 
-function AvailBadge({ availability }) {
+function AvailBadge({ status }) {
   const map = {
     available: { bg: 'rgba(16,185,129,0.15)',  color: '#10B981', border: 'rgba(16,185,129,0.3)' },
     limited:   { bg: 'rgba(245,158,11,0.15)',  color: '#F59E0B', border: 'rgba(245,158,11,0.3)' },
     full:      { bg: 'rgba(239,68,68,0.15)',   color: '#EF4444', border: 'rgba(239,68,68,0.3)' },
   };
-  const s = map[availability] ?? map.limited;
+  const s = map[status] ?? map.limited;
   return (
     <span style={{ background: s.bg, color: s.color, border: `1px solid ${s.border}`, borderRadius: '999px', padding: '3px 10px', fontSize: '11px', fontWeight: 500 }}>
-      {availability}
+      {status}
     </span>
   );
 }
 
 export default function Mentors() {
+  const [mentors, setMentors] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState(null);
+
+  useEffect(() => {
+    fetch(`${API}/api/mentors`)
+      .then(r => r.json())
+      .then(data => {
+        setMentors(data.mentors ?? []);
+        setLoading(false);
+      })
+      .catch(err => {
+        setError(err.message);
+        setLoading(false);
+      });
+  }, []);
+
+  if (loading) return (
+    <div style={{ color: 'rgba(255,255,255,0.4)', fontFamily: 'JetBrains Mono, monospace', fontSize: '13px', padding: '48px 0' }}>
+      Loading mentors…
+    </div>
+  );
+
+  if (error) return (
+    <div style={{ color: '#EF4444', fontFamily: 'JetBrains Mono, monospace', fontSize: '13px', padding: '48px 0' }}>
+      Error: {error}
+    </div>
+  );
+
   return (
     <div>
       <div style={{ marginBottom: '28px' }}>
@@ -33,9 +70,10 @@ export default function Mentors() {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
-        {mockMentors.map(mentor => {
+        {mentors.map(mentor => {
           const initials = mentor.name.split(' ').map(w => w[0]).join('').slice(0, 2);
-          const pct = Math.round((mentor.current_load / mentor.capacity) * 100);
+          const pct      = mentor.utilisation_pct ?? Math.round((mentor.current_load / mentor.capacity) * 100);
+          const avail    = availString(mentor);
           return (
             <div key={mentor.id} style={{ background: '#111827', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '12px', padding: '18px' }}>
               <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', marginBottom: '14px' }}>
@@ -48,15 +86,17 @@ export default function Mentors() {
                 </div>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <p style={{ fontWeight: 700, color: 'white', fontSize: '15px', lineHeight: 1.2 }}>{mentor.name}</p>
-                  <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '12px', marginTop: '3px', lineHeight: 1.3 }}>{mentor.role}</p>
+                  <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '12px', marginTop: '3px', lineHeight: 1.3 }}>
+                    {mentor.industry?.join(', ') ?? ''}
+                  </p>
                 </div>
                 <div style={{ flexShrink: 0 }}>
-                  <AvailBadge availability={mentor.availability} />
+                  <AvailBadge status={avail} />
                 </div>
               </div>
 
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: '5px', marginBottom: '14px' }}>
-                {mentor.expertise.map(tag => (
+                {(mentor.expertise ?? []).map(tag => (
                   <span key={tag} style={{ background: 'rgba(255,255,255,0.07)', color: 'rgba(255,255,255,0.55)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '4px', padding: '3px 8px', fontSize: '11px' }}>
                     {tag}
                   </span>

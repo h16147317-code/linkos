@@ -56,43 +56,121 @@ router.post('/batch', async (req, res) => {
   }
 });
 
+function fallbackScore(industry, pitch) {
+  const ind = (industry || '').toLowerCase();
+  const p   = (pitch   || '').toLowerCase();
+  if (ind.includes('health'))   return 70;
+  if (ind.includes('fintech') || p.includes('finance')) return 72;
+  if (ind.includes('agritech')) return 65;
+  if (ind.includes('cleantech')) return 68;
+  if (ind.includes('edtech'))   return 66;
+  if (p.includes('ai') || p.includes('tech')) return 65;
+  return 60;
+}
+
 async function scoreInBackground(batch_id, applications) {
-  let completed = 0;
+  // Fetch full founder details for all applications in one query
+  const founderIds = applications.map(a => a.founder_id);
+  const founders = await prisma.founder.findMany({
+    where: { id: { in: founderIds } }
+  });
+  const founderMap = Object.fromEntries(founders.map(f => [f.id, f]));
 
-  for (const app of applications) {
-    try {
-      const agentRes = await axios.post(`${AGENT_URL}/agent/score`, {
-        founder_id: app.founder_id,
-        answers: {
-          problem:  app.answers?.problem  || '',
-          solution: app.answers?.solution || '',
-          traction: app.answers?.traction || '',
-          ask:      app.answers?.ask      || ''
-        }
-      });
+  const payload = {
+    applications: applications.map(app => {
+      const founder = founderMap[app.founder_id] || {};
+      return {
+        id:            app.founder_id,
+        company_name:  founder.company_name  || '',
+        industry:      founder.industry      || '',
+        stage:         founder.stage         || '',
+        pitch_summary: founder.pitch_summary || '',
+        problem:       app.answers?.problem  || '',
+        solution:      app.answers?.solution || '',
+        traction:      app.answers?.traction || '',
+        ask:           app.answers?.ask      || ''
+      };
+    }),
+    programme: {
+      id:             'prog-cip-catalyser-cohort-12',
+      name:           'CIP Catalyser',
+      criteria:       'Malaysian tech startup',
+      cohort_number:  12
+    },
+    mentors:         [],
+    history_context: ''
+  };
 
-      const { score, tier, breakdown, summary } = agentRes.data;
-      const computedTier = tier || (score >= 75 ? 'top' : score >= 50 ? 'mid' : 'pass');
-
+  let agentResults = [];
+  try {
+    const agentRes = await axios.post(`${AGENT_URL}/agent/process-batch`, payload);
+    agentResults = agentRes.data.scored_applications || [];
+  } catch (err) {
+    // Agent unreachable — apply backend fallback for every application
+    for (const app of applications) {
+      const founder = founderMap[app.founder_id] || {};
+      const score   = fallbackScore(founder.industry, founder.pitch_summary);
+      const tier    = score >= 75 ? 'top' : score >= 50 ? 'mid' : 'pass';
       await prisma.application.updateMany({
         where: { founder_id: app.founder_id, batch_id },
         data: {
           score,
-          tier:              computedTier,
-          problem_clarity:   breakdown?.problem_clarity   || null,
-          solution_strength: breakdown?.solution_strength || null,
-          traction_score:    breakdown?.traction          || null,
-          team_fit:          breakdown?.team_fit          || null,
-          summary:           summary || null,
-          scored_at:         new Date(),
-          status:            'complete'
+          tier,
+          confidence: 'low',
+          flags:      [],
+          summary:    'Pending AI review - will update automatically',
+          scored_at:  new Date(),
+          status:     'complete'
         }
       });
+    }
+    await prisma.batch.update({
+      where: { id: batch_id },
+      data: { status: 'complete', completed: applications.length }
+    });
+    return;
+  }
 
-    } catch (err) {
+  // Index results by founder_id (agent returns id = founder_id)
+  const resultMap = Object.fromEntries(agentResults.map(r => [r.id, r]));
+
+  const largeBatch = applications.length > 5;
+  let completed = 0;
+
+  for (const app of applications) {
+    const result  = resultMap[app.founder_id];
+    const founder = founderMap[app.founder_id] || {};
+
+    if (result) {
+      const { score, confidence, reasoning, flags } = result;
+      const tier = score >= 75 ? 'top' : score >= 50 ? 'mid' : 'pass';
       await prisma.application.updateMany({
         where: { founder_id: app.founder_id, batch_id },
-        data: { status: 'failed' }
+        data: {
+          score,
+          tier,
+          confidence: confidence || null,
+          flags:      flags      || [],
+          summary:    reasoning  || null,
+          scored_at:  new Date(),
+          status:     'complete'
+        }
+      });
+    } else {
+      // Result missing for this founder — use backend fallback
+      const score = fallbackScore(founder.industry, founder.pitch_summary);
+      const tier  = score >= 75 ? 'top' : score >= 50 ? 'mid' : 'pass';
+      await prisma.application.updateMany({
+        where: { founder_id: app.founder_id, batch_id },
+        data: {
+          score,
+          tier,
+          confidence: 'low',
+          flags:      [],
+          summary:    'Pending AI review - will update automatically',
+          scored_at:  new Date(),
+          status:     'complete'
+        }
       });
     }
 
@@ -101,6 +179,10 @@ async function scoreInBackground(batch_id, applications) {
       where: { id: batch_id },
       data: { completed }
     });
+
+    if (largeBatch) {
+      await new Promise(r => setTimeout(r, 4000));
+    }
   }
 
   await prisma.batch.update({

@@ -100,6 +100,8 @@ router.get('/:id/score', async (req, res) => {
       founder_id: application.founder_id,
       score:      application.score,
       tier:       application.tier,
+      confidence: application.confidence,
+      flags:      application.flags,
       breakdown: {
         problem_clarity:   application.problem_clarity,
         solution_strength: application.solution_strength,

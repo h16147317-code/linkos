@@ -30,6 +30,8 @@ model Application {
   ask                String?
   score              Int?
   tier               String?
+  confidence         String?
+  flags              String[]
   problem_clarity    Int?
   solution_strength  Int?
   traction_score     Int?

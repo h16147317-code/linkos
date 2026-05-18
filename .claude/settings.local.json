@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell($pid = \\(Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue\\).OwningProcess | Select-Object -First 1; if \\($pid\\) { Stop-Process -Id $pid -Force; \"Killed PID $pid on port 3000\" } else { \"Nothing on port 3000\" })",
+      "PowerShell($proc = \\(Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue\\).OwningProcess | Select-Object -First 1; if \\($proc\\) { Stop-Process -Id $proc -Force; \"Killed PID $proc on port 3000\" } else { \"Nothing on port 3000\" })",
+      "PowerShell($proc = \\(Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue\\).OwningProcess | Select-Object -First 1; if \\($proc\\) { Stop-Process -Id $proc -Force; \"Killed PID $proc\" } else { \"Port 3000 free\" })",
+      "PowerShell($p3000 = \\(Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue\\).OwningProcess | Select-Object -First 1; $p8000 = \\(Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue\\).OwningProcess | Select-Object -First 1; \"Port 3000: $\\(if \\($p3000\\) { \"RUNNING \\(PID $p3000\\)\" } else { \"NOT RUNNING\" }\\)\"; \"Port 8000: $\\(if \\($p8000\\) { \"RUNNING \\(PID $p8000\\)\" } else { \"NOT RUNNING\" }\\)\")",
+      "PowerShell($founders = Invoke-RestMethod -Uri \"http://localhost:3000/api/founders\" -Method GET; $first = $founders.founders[0]; \"Founder ID: $\\($first.id\\)\"; \"Name: $\\($first.name\\)\"; \"Company: $\\($first.company_name\\)\")",
+      "PowerShell($body = @{ applications = @\\(@{ founder_id = \"044f0d4b-86b9-410a-8aff-632268be4391\"; answers = @{ problem = \"Malaysian startups struggle to get funding\"; solution = \"AI matching platform for Cradle Fund\"; traction = \"500 users, RM50k MRR\"; ask = \"RM500k seed funding\" } }\\) } | ConvertTo-Json -Depth 5; $response = Invoke-RestMethod -Uri \"http://localhost:3000/api/applications/batch\" -Method POST -Body $body -ContentType \"application/json\"; $response | ConvertTo-Json)",
+      "PowerShell($p3000 = \\(Get-NetTCPConnection -LocalPort 3000 -State Listen -ErrorAction SilentlyContinue\\).OwningProcess | Select-Object -First 1; $p8000 = \\(Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue\\).OwningProcess | Select-Object -First 1; $p5173 = \\(Get-NetTCPConnection -LocalPort 5173 -State Listen -ErrorAction SilentlyContinue\\).OwningProcess | Select-Object -First 1; \"3000: $\\(if \\($p3000\\) {\"RUNNING\"} else {\"DOWN\"}\\)\"; \"8000: $\\(if \\($p8000\\) {\"RUNNING\"} else {\"DOWN\"}\\)\"; \"5173: $\\(if \\($p5173\\) {\"RUNNING\"} else {\"DOWN\"}\\)\")",
+      "PowerShell(try { $r = Invoke-RestMethod \"http://localhost:3000/api/founders\" -Method GET; \"Founders: $\\($r.total\\)\" } catch { \"ERROR: $_\" })",
+      "PowerShell(try { $r = Invoke-RestMethod \"http://localhost:3000/api/mentors\" -Method GET; \"Mentors: $\\($r.total\\)\" } catch { \"ERROR: $_\" })",
+      "PowerShell(try { $r = Invoke-RestMethod \"http://localhost:8000/health\" -Method GET; \"Agent health: $\\($r | ConvertTo-Json -Compress\\)\" } catch { \"ERROR: $_\" })",
+      "PowerShell(try { $r = Invoke-WebRequest \"http://localhost:5173\" -UseBasicParsing; \"Frontend: HTTP $\\($r.StatusCode\\)\" } catch { \"ERROR: $_\" })"
+    ]
+  }
+}

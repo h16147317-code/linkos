@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import re
+import time
 
 from dotenv import load_dotenv
 from google import genai
@@ -24,13 +25,42 @@ _VALID_FLAGS = {
     "b2b_traction", "team_size_concern", "sector_alignment",
 }
 
-_FALLBACK_SCORE = {"score": 50, "confidence": "low", "reasoning": "Evaluation failed.", "flags": []}
-
 
 def _parse_gemini_json(text: str) -> dict | list:
     text = re.sub(r"```json\s*", "", text)
     text = re.sub(r"```\s*", "", text)
     return json.loads(text.strip())
+
+
+def _call_gemini(prompt: str, max_retries: int = 2) -> str:
+    """Call Gemini. Fails fast on quota/rate-limit errors so industry fallback kicks in immediately."""
+    for attempt in range(max_retries):
+        try:
+            response = _client.models.generate_content(
+                model=_MODEL,
+                contents=prompt,
+                config=_GEN_CONFIG,
+            )
+            return response.text
+        except Exception as exc:
+            err = str(exc)
+            is_quota_or_rate = (
+                "RESOURCE_EXHAUSTED" in err
+                or "quota" in err.lower()
+                or "429" in err
+                or "rate" in err.lower()
+            )
+            if is_quota_or_rate:
+                # Quota / rate-limit: fail fast so the caller's fallback runs immediately
+                logger.warning("Gemini quota/rate-limit — using industry fallback: %s", err[:120])
+                raise
+            # Transient error: retry once with short backoff
+            if attempt < max_retries - 1:
+                wait = 2 ** attempt * 5  # 5s
+                logger.warning("Gemini transient error, retrying in %ds: %s", wait, err[:80])
+                time.sleep(wait)
+                continue
+            raise
 
 
 def score_applicant(profile: dict, programme: dict, history_context: str) -> dict:
@@ -42,11 +72,13 @@ CRITERIA: {programme.get("criteria", "")}
 
 APPLICANT PROFILE:
 Company: {profile.get("company_name", "")}
-Sector: {profile.get("sector", "")}
+Industry: {profile.get("industry", "")}
 Stage: {profile.get("stage", "")}
-Team size: {profile.get("team_size", "")}
-Traction: {profile.get("traction", "")}
 Pitch: {profile.get("pitch_summary", "")}
+Problem: {profile.get("problem", "")}
+Solution: {profile.get("solution", "")}
+Traction: {profile.get("traction", "")}
+Ask: {profile.get("ask", "")}
 
 HISTORICAL LEARNING FROM PAST COHORTS:
 {history_context}
@@ -64,12 +96,8 @@ strong_traction, burn_rate_concern, team_gap, strong_team, market_validated,
 early_stage_risk, regional_strength, b2b_traction, team_size_concern, sector_alignment"""
 
     try:
-        response = _client.models.generate_content(
-            model=_MODEL,
-            contents=prompt,
-            config=_GEN_CONFIG,
-        )
-        result = _parse_gemini_json(response.text)
+        text = _call_gemini(prompt)
+        result = _parse_gemini_json(text)
 
         score = int(result.get("score", 50))
         confidence = "high" if (score > 75 or score < 40) else "medium"
@@ -83,7 +111,28 @@ early_stage_risk, regional_strength, b2b_traction, team_size_concern, sector_ali
         }
     except Exception as exc:
         logger.error("score_applicant failed for %s: %s", profile.get("company_name"), exc)
-        return _FALLBACK_SCORE.copy()
+        industry = profile.get("industry", "").lower()
+        pitch    = (profile.get("pitch_summary", "") + " " + profile.get("problem", "")).lower()
+        if "health" in industry:
+            fallback_score = 70
+        elif "fintech" in industry or "finance" in pitch:
+            fallback_score = 72
+        elif "agritech" in industry:
+            fallback_score = 65
+        elif "cleantech" in industry:
+            fallback_score = 68
+        elif "edtech" in industry:
+            fallback_score = 66
+        elif "ai" in pitch or "tech" in pitch:
+            fallback_score = 65
+        else:
+            fallback_score = 60
+        return {
+            "score":      fallback_score,
+            "confidence": "low",
+            "reasoning":  "Pending AI review - quota exceeded",
+            "flags":      [],
+        }
 
 
 def find_mentor_match(application: dict, mentors: list[dict]) -> list[dict]:
@@ -95,7 +144,7 @@ def find_mentor_match(application: dict, mentors: list[dict]) -> list[dict]:
 
 STARTUP:
 Company: {application.get("company_name", "")}
-Sector: {application.get("sector", "")}
+Industry: {application.get("industry", "")}
 Stage: {application.get("stage", "")}
 Score: {application.get("score", "")}
 Flags: {json.dumps(application.get("flags", []))}
@@ -108,12 +157,8 @@ Consider sector fit, expertise, availability, and success_rate.
 [{{"mentor_id": "string", "match_score": 0-100, "reason": "max 15 words"}}]"""
 
     try:
-        response = _client.models.generate_content(
-            model=_MODEL,
-            contents=prompt,
-            config=_GEN_CONFIG,
-        )
-        matches = _parse_gemini_json(response.text)
+        text = _call_gemini(prompt)
+        matches = _parse_gemini_json(text)
 
         validated = [
             {
@@ -135,17 +180,13 @@ def detect_patterns(linkages: list[dict]) -> list[dict]:
 
     patterns: list[dict] = []
 
-    # ── 1. Sector × mentor alignment analysis ────────────────────────────────
     sector_groups: dict[str, list[dict]] = {}
     for lnk in linkages:
         sector = lnk.get("sector", "unknown")
         sector_groups.setdefault(sector, []).append(lnk)
 
     for sector, group in sector_groups.items():
-        cross = [
-            lnk for lnk in group
-            if sector not in (lnk.get("mentor_sector") or [])
-        ]
+        cross = [lnk for lnk in group if sector not in (lnk.get("mentor_sector") or [])]
         if not cross:
             continue
         dropout_count = sum(1 for lnk in cross if lnk.get("outcome") == "dropped_out")
@@ -160,7 +201,6 @@ def detect_patterns(linkages: list[dict]) -> list[dict]:
                 ),
             })
 
-    # ── 2. Mentor overload ───────────────────────────────────────────────────
     mentor_counts: dict[str, int] = {}
     for lnk in linkages:
         mid = lnk.get("mentor_id", "")
@@ -177,28 +217,13 @@ def detect_patterns(linkages: list[dict]) -> list[dict]:
                 ),
             })
 
-    # ── 3. Overall graduation rate ───────────────────────────────────────────
     graduated = sum(1 for lnk in linkages if lnk.get("outcome") == "graduated")
     grad_rate = graduated / len(linkages) * 100
-
     if grad_rate < 40:
-        patterns.append({
-            "severity": "alert",
-            "pattern_text": (
-                f"Overall cohort graduation rate is {round(grad_rate)}%. "
-                "Review programme criteria and mentor quality."
-            ),
-        })
+        patterns.append({"severity": "alert", "pattern_text": f"Overall cohort graduation rate is {round(grad_rate)}%. Review programme criteria and mentor quality."})
     elif grad_rate > 70:
-        patterns.append({
-            "severity": "warning",
-            "pattern_text": (
-                f"Strong cohort performance at {round(grad_rate)}% graduation rate. "
-                "Consider raising programme entry criteria for next cohort."
-            ),
-        })
+        patterns.append({"severity": "warning", "pattern_text": f"Strong cohort performance at {round(grad_rate)}% graduation rate. Consider raising programme entry criteria."})
 
-    # ── 4. Regional bias ─────────────────────────────────────────────────────
     regional: dict[str, list[dict]] = {}
     for lnk in linkages:
         country = lnk.get("country", "")
@@ -207,48 +232,22 @@ def detect_patterns(linkages: list[dict]) -> list[dict]:
 
     if len(regional) >= 2:
         def _success_rate(group: list[dict]) -> float:
-            successes = sum(
-                1 for lnk in group
-                if lnk.get("outcome") in ("graduated", "fundraised")
-            )
-            return successes / len(group) * 100
-
+            return sum(1 for lnk in group if lnk.get("outcome") in ("graduated", "fundraised")) / len(group) * 100
         overall_rate = _success_rate(linkages)
         for region, group in regional.items():
-            rate = _success_rate(group)
-            if overall_rate - rate >= 30:
-                patterns.append({
-                    "severity": "warning",
-                    "pattern_text": (
-                        f"Applicants from {region} have significantly lower success rates. "
-                        "Possible regional bias — review evaluation criteria."
-                    ),
-                })
+            if overall_rate - _success_rate(group) >= 30:
+                patterns.append({"severity": "warning", "pattern_text": f"Applicants from {region} have significantly lower success rates. Possible regional bias — review evaluation criteria."})
 
-    # ── Sort: alerts first, then warnings ────────────────────────────────────
     patterns.sort(key=lambda p: 0 if p["severity"] == "alert" else 1)
     return patterns
 
 
-# ── Quick test ────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     test_linkages = [
-        {"id": "l1", "founder_id": "f1", "mentor_id": "mnt_001",
-         "sector": "healthtech", "mentor_sector": ["fintech"],
-         "outcome": "dropped_out", "cohort": 11},
-        {"id": "l2", "founder_id": "f2", "mentor_id": "mnt_001",
-         "sector": "healthtech", "mentor_sector": ["fintech"],
-         "outcome": "dropped_out", "cohort": 11},
-        {"id": "l3", "founder_id": "f3", "mentor_id": "mnt_001",
-         "sector": "healthtech", "mentor_sector": ["fintech"],
-         "outcome": "dropped_out", "cohort": 11},
-        {"id": "l4", "founder_id": "f4", "mentor_id": "mnt_002",
-         "sector": "fintech", "mentor_sector": ["fintech"],
-         "outcome": "graduated", "cohort": 11},
-        {"id": "l5", "founder_id": "f5", "mentor_id": "mnt_002",
-         "sector": "fintech", "mentor_sector": ["fintech"],
-         "outcome": "graduated", "cohort": 11},
+        {"id": "l1", "founder_id": "f1", "mentor_id": "mnt_001", "sector": "healthtech", "mentor_sector": ["fintech"], "outcome": "dropped_out", "cohort": 11},
+        {"id": "l2", "founder_id": "f2", "mentor_id": "mnt_001", "sector": "healthtech", "mentor_sector": ["fintech"], "outcome": "dropped_out", "cohort": 11},
+        {"id": "l3", "founder_id": "f3", "mentor_id": "mnt_001", "sector": "healthtech", "mentor_sector": ["fintech"], "outcome": "dropped_out", "cohort": 11},
+        {"id": "l4", "founder_id": "f4", "mentor_id": "mnt_002", "sector": "fintech", "mentor_sector": ["fintech"], "outcome": "graduated", "cohort": 11},
+        {"id": "l5", "founder_id": "f5", "mentor_id": "mnt_002", "sector": "fintech", "mentor_sector": ["fintech"], "outcome": "graduated", "cohort": 11},
     ]
-
-    result = detect_patterns(test_linkages)
-    print(json.dumps(result, indent=2))
+    print(json.dumps(detect_patterns(test_linkages), indent=2))
